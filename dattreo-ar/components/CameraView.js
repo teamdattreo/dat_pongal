@@ -80,26 +80,60 @@ function triggerDownload(url, prefix) {
   a.remove();
 }
 
-function getScreenOrientation() {
-  if (typeof window === 'undefined') return 0;
+// Calculate rotation from device orientation (accelerometer/gyroscope)
+function calculateRotationFromDeviceOrientation(beta, gamma) {
+  if (beta === null || gamma === null) return 0;
   
-  if (window.screen?.orientation?.angle !== undefined) {
-    return window.screen.orientation.angle;
+  // Normalize angles
+  const normBeta = ((beta + 180) % 360) - 180;
+  const normGamma = ((gamma + 180) % 360) - 180;
+  
+  // Determine orientation based on tilt angles
+  const absBeta = Math.abs(normBeta);
+  const absGamma = Math.abs(normGamma);
+  
+  // If phone is mostly upright (portrait)
+  if (absBeta < 45 && absGamma < 45) {
+    // Check if phone is upside down
+    if (normBeta > 135 || normBeta < -135) {
+      return 180; // Portrait upside down
+    }
+    return 0; // Portrait upright
   }
   
-  if (typeof window.orientation === 'number') {
-    const angle = window.orientation;
-    if (angle === 90) return 90;
-    if (angle === -90) return -90;
-    if (angle === 180) return 180;
-    return 0;
-  }
-  
-  if (window.innerWidth > window.innerHeight) {
-    return window.innerWidth > window.innerHeight * 1.5 ? 90 : 0;
+  // If phone is in landscape
+  if (absGamma > 45) {
+    if (normGamma > 0) {
+      return 90; // Landscape left (phone rotated right)
+    } else {
+      return -90; // Landscape right (phone rotated left)
+    }
   }
   
   return 0;
+}
+
+// Get the rotation needed for the captured image
+function getRotationForCapturedImage(deviceOrientationAngle, capturedWidth, capturedHeight) {
+  // If image is already portrait (height >= width), check if upside down
+  if (capturedHeight >= capturedWidth) {
+    if (deviceOrientationAngle === 180) {
+      return 180; // Portrait upside down
+    }
+    return 0; // Portrait upright
+  }
+  
+  // If image is landscape (width > height), rotate based on device orientation
+  switch (deviceOrientationAngle) {
+    case 90: // Landscape left captured
+      return -90; // Rotate left to make portrait
+    case -90: // Landscape right captured
+      return 90; // Rotate right to make portrait
+    case 180: // Portrait upside down
+      return 180; // Rotate 180 degrees
+    default:
+      return 90; // Default: rotate 90 degrees clockwise
+  }
 }
 
 function rotateCanvas(sourceCanvas, angleDeg) {
@@ -133,22 +167,6 @@ function rotateCanvas(sourceCanvas, angleDeg) {
   return canvas;
 }
 
-function autoRotateForPortrait(capturedCanvas) {
-  const { width, height } = capturedCanvas;
-  
-  if (height >= width) {
-    return capturedCanvas;
-  }
-  
-  const screenOrientation = getScreenOrientation();
-  
-  if (screenOrientation === 90 || screenOrientation === -90) {
-    return rotateCanvas(capturedCanvas, -screenOrientation);
-  }
-  
-  return rotateCanvas(capturedCanvas, 90);
-}
-
 export default function InstaFrameCameraImage({ className = "" }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -166,6 +184,14 @@ export default function InstaFrameCameraImage({ className = "" }) {
   const [frame, setFrame] = useState(FRAME);
   
   const [cameraResolution, setCameraResolution] = useState({ width: 0, height: 0 });
+  
+  // Device orientation state (accelerometer/gyroscope)
+  const [deviceOrientation, setDeviceOrientation] = useState({
+    beta: 0,
+    gamma: 0,
+    angle: 0
+  });
+  const [isDeviceOrientationSupported, setIsDeviceOrientationSupported] = useState(false);
 
   // Load background
   useEffect(() => {
@@ -184,7 +210,58 @@ export default function InstaFrameCameraImage({ className = "" }) {
     };
   }, []);
 
-  // Start camera with minimal constraints (use device defaults)
+  // Setup device orientation listener (accelerometer/gyroscope)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleDeviceOrientation = (event) => {
+      const { beta, gamma } = event;
+      const angle = calculateRotationFromDeviceOrientation(beta, gamma);
+      
+      setDeviceOrientation({
+        beta: beta || 0,
+        gamma: gamma || 0,
+        angle
+      });
+    };
+
+    const checkDeviceOrientationSupport = async () => {
+      if (typeof DeviceOrientationEvent !== 'undefined') {
+        // iOS 13+ requires permission
+        if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+          try {
+            const permissionState = await DeviceOrientationEvent.requestPermission();
+            if (permissionState === 'granted') {
+              window.addEventListener('deviceorientation', handleDeviceOrientation);
+              setIsDeviceOrientationSupported(true);
+            } else {
+              setIsDeviceOrientationSupported(false);
+              console.warn('Device orientation permission denied');
+            }
+          } catch (err) {
+            console.error('Error requesting device orientation permission:', err);
+            setIsDeviceOrientationSupported(false);
+          }
+        } else if ('ondeviceorientation' in window) {
+          // Non-iOS devices or older iOS
+          window.addEventListener('deviceorientation', handleDeviceOrientation);
+          setIsDeviceOrientationSupported(true);
+        } else {
+          setIsDeviceOrientationSupported(false);
+        }
+      } else {
+        setIsDeviceOrientationSupported(false);
+      }
+    };
+
+    checkDeviceOrientationSupport();
+
+    return () => {
+      window.removeEventListener('deviceorientation', handleDeviceOrientation);
+    };
+  }, []);
+
+  // Start camera with default device resolution
   useEffect(() => {
     let cancelled = false;
     async function start() {
@@ -195,12 +272,18 @@ export default function InstaFrameCameraImage({ className = "" }) {
           streamRef.current = null;
         }
         
-        // Use minimal constraints to get the widest field of view
+        // Try to get the widest field of view (least zoomed) camera
         const constraints = {
           video: {
             facingMode: facing,
-            // Don't specify resolution - let the device use its default
-            // This typically gives the widest field of view
+            // Request a resolution that fits well in the preview window
+            // Use exact constraints for better control
+            width: { min: 640, ideal: 1280, max: 1920 },
+            height: { min: 480, ideal: 720, max: 1080 },
+            // Try to get the widest aspect ratio (less zoom)
+            aspectRatio: { ideal: 4/3 }, // Common for wider FOV
+            // Disable any digital zoom
+            zoom: false,
           },
           audio: false,
         };
@@ -213,34 +296,10 @@ export default function InstaFrameCameraImage({ className = "" }) {
         }
 
         streamRef.current = stream;
-        
-        // Try to disable zoom on the video track if supported
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          const capabilities = videoTrack.getCapabilities?.();
-          const settings = videoTrack.getSettings?.();
-          
-          // Log capabilities for debugging
-          if (debug) {
-            console.log("Camera capabilities:", capabilities);
-            console.log("Camera settings:", settings);
-          }
-          
-          // Try to set zoom to minimum if supported
-          if (capabilities?.zoom) {
-            try {
-              await videoTrack.applyConstraints({
-                advanced: [{ zoom: capabilities.zoom.min }]
-              });
-            } catch (zoomError) {
-              console.log("Could not set zoom:", zoomError);
-            }
-          }
-        }
-        
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           
+          // Wait for video metadata to load
           videoRef.current.onloadedmetadata = () => {
             if (videoRef.current) {
               const { videoWidth, videoHeight } = videoRef.current;
@@ -253,7 +312,27 @@ export default function InstaFrameCameraImage({ className = "" }) {
         }
       } catch (e) {
         console.error("Camera error:", e);
-        setError(e?.message || "Could not access camera.");
+        // Try with simpler constraints if the first attempt fails
+        try {
+          const fallbackConstraints = {
+            video: {
+              facingMode: facing,
+              // Minimal constraints to get any camera
+            },
+            audio: false,
+          };
+          
+          const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+          if (!cancelled) {
+            streamRef.current = stream;
+            if (videoRef.current) {
+              videoRef.current.srcObject = stream;
+              await videoRef.current.play();
+            }
+          }
+        } catch (fallbackError) {
+          setError(fallbackError?.message || "Could not access camera.");
+        }
       }
     }
 
@@ -265,8 +344,9 @@ export default function InstaFrameCameraImage({ className = "" }) {
         streamRef.current = null;
       }
     };
-  }, [facing, debug]);
+  }, [facing]);
 
+  // Window inside the frame in PX
   const windowPx = useMemo(() => {
     const x = frame.w * WINDOW.xPct;
     const y = frame.h * WINDOW.yPct;
@@ -276,6 +356,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
     return { x, y, w, h, r };
   }, [frame.w, frame.h]);
 
+  // Capture photo with auto-rotation
   async function capture() {
     if (!videoRef.current || busy) return;
     setBusy(true);
@@ -288,15 +369,32 @@ export default function InstaFrameCameraImage({ className = "" }) {
       }
 
       console.log(`Capturing at: ${video.videoWidth}x${video.videoHeight}`);
+      console.log(`Device orientation: ${deviceOrientation.angle}°`);
 
+      // 1. Capture the raw video frame (mirrored for front camera)
       const rawSnapshot = snapshotMirroredVideo(video, facing === "user");
-      const finalSnapshot = autoRotateForPortrait(rawSnapshot);
       
+      // 2. Calculate rotation needed based on device orientation and image dimensions
+      const rotationAngle = getRotationForCapturedImage(
+        deviceOrientation.angle,
+        rawSnapshot.width,
+        rawSnapshot.height
+      );
+      
+      // 3. Apply rotation if needed
+      const finalSnapshot = rotationAngle !== 0 
+        ? rotateCanvas(rawSnapshot, rotationAngle)
+        : rawSnapshot;
+      
+      // 4. Create photo-only canvas for preview - use actual photo dimensions
       const photoCanvas = document.createElement("canvas");
+      
+      // Use the rotated snapshot dimensions for the preview
       photoCanvas.width = finalSnapshot.width;
       photoCanvas.height = finalSnapshot.height;
       const pctx = photoCanvas.getContext("2d");
       
+      // Fill with black background and draw the photo
       pctx.fillStyle = "#000";
       pctx.fillRect(0, 0, photoCanvas.width, photoCanvas.height);
       pctx.drawImage(finalSnapshot, 0, 0);
@@ -304,11 +402,13 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const photoUrl = photoCanvas.toDataURL("image/png");
       setCapturedPhotoUrl(photoUrl);
 
+      // 5. Create full export canvas with background
       const out = document.createElement("canvas");
       out.width = OUT.W;
       out.height = OUT.H;
       const ctx = out.getContext("2d");
 
+      // Background
       if (bgImg) {
         drawCover(ctx, bgImg, 0, 0, OUT.W, OUT.H);
       } else {
@@ -319,6 +419,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
         ctx.fillRect(0, 0, OUT.W, OUT.H);
       }
 
+      // Draw frame with photo
       ctx.save();
       ctx.translate(frame.cx, frame.cy);
       ctx.rotate((frame.rotateDeg * Math.PI) / 180);
@@ -326,6 +427,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const left = -frame.w / 2;
       const top = -frame.h / 2;
 
+      // Draw photo in window area
       const wx = left + windowPx.x;
       const wy = top + windowPx.y;
       const ww = windowPx.w;
@@ -337,6 +439,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
       ctx.fillStyle = "#000";
       ctx.fillRect(wx, wy, ww, wh);
       
+      // Draw the final rotated photo
       drawCover(ctx, finalSnapshot, wx, wy, ww, wh);
       ctx.restore();
 
@@ -345,6 +448,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const finalExportUrl = out.toDataURL("image/png");
       setExportUrl(finalExportUrl);
       
+      // Auto-download
       triggerDownload(finalExportUrl, "insta_frame");
       
     } catch (e) {
@@ -360,6 +464,22 @@ export default function InstaFrameCameraImage({ className = "" }) {
     setExportUrl("");
   }
 
+  // Request orientation permission manually (for iOS)
+  const requestOrientationPermission = async () => {
+    if (typeof DeviceOrientationEvent !== 'undefined' && 
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try {
+        const permissionState = await DeviceOrientationEvent.requestPermission();
+        if (permissionState === 'granted') {
+          window.location.reload();
+        }
+      } catch (error) {
+        console.error('Error requesting permission:', error);
+      }
+    }
+  };
+
+  // DOM percentages for positioning
   const framePct = useMemo(() => {
     return {
       cx: (frame.cx / OUT.W) * 100,
@@ -404,7 +524,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
         >
           {/* Camera window */}
           <div
-            className="absolute overflow-hidden bg-black"
+            className="absolute overflow-hidden"
             style={{
               left: `${winPct.left}%`,
               top: `${winPct.top}%`,
@@ -417,7 +537,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
               <div className="relative h-full w-full">
                 <video
                   ref={videoRef}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-contain"
                   style={{
                     transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
                     transformOrigin: "center",
@@ -426,6 +546,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
                   muted
                   autoPlay
                 />
+                {/* Optional: Add a subtle border to show the full camera view */}
                 {debug && (
                   <div className="absolute inset-0 border border-blue-400/50 pointer-events-none" />
                 )}
@@ -442,7 +563,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
         {/* Error */}
         {error ? (
-          <div className="absolute inset-0 grid place-items-center bg-black/70 p-6 text-center z-50">
+          <div className="absolute inset-0 grid place-items-center bg-black/70 p-6 text-center">
             <div className="max-w-xs rounded-xl border border-red-500/30 bg-red-950/40 p-4 text-sm text-red-200 whitespace-pre-wrap">
               {error}
             </div>
@@ -451,16 +572,19 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
         {/* Debug info */}
         {debug && (
-          <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs z-40">
+          <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs">
             <div>Camera: {cameraResolution.width}x{cameraResolution.height}</div>
-            <div>Orientation: {getScreenOrientation()}°</div>
+            <div>Device Orientation: {deviceOrientation.angle}°</div>
+            <div>β (tilt): {deviceOrientation.beta?.toFixed(1) || 'N/A'}</div>
+            <div>γ (tilt): {deviceOrientation.gamma?.toFixed(1) || 'N/A'}</div>
             <div>Facing: {facing}</div>
-            <div>Aspect: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
+            <div>Aspect Ratio: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
+            <div>Auto-Rotate: {isDeviceOrientationSupported ? 'Enabled' : 'Disabled'}</div>
           </div>
         )}
 
         {/* Controls */}
-        <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3 z-30">          
+        <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3">          
           <button
             type="button"
             onClick={() => setFacing((v) => (v === "user" ? "environment" : "user"))}
@@ -484,17 +608,26 @@ export default function InstaFrameCameraImage({ className = "" }) {
           >
             Retake
           </button>
+          {!isDeviceOrientationSupported && (
+            <button
+              type="button"
+              onClick={requestOrientationPermission}
+              className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
+            >
+              Enable Auto-Rotate
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setDebug(v => !v)}
             className="rounded-xl bg-gray-700 px-3 py-2 text-sm font-semibold text-white"
           >
-            {debug ? "Hide" : "Debug"}
+            {debug ? "Hide Debug" : "Debug"}
           </button>
         </div>
       </div>
 
-      {/* Debug panel */}
+      {/* Quick tune (optional) */}
       {debug ? (
         <div className="mx-auto mt-3 max-w-[520px] rounded-xl border border-white/10 bg-neutral-950/60 p-3 text-xs text-white">
           <div className="mb-2 font-semibold">Debug Information</div>
@@ -502,8 +635,14 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Camera Resolution:</div>
             <div>{cameraResolution.width}x{cameraResolution.height}</div>
             
-            <div>Screen Orientation:</div>
-            <div>{getScreenOrientation()}°</div>
+            <div>Device Orientation:</div>
+            <div>{deviceOrientation.angle}°</div>
+            
+            <div>β (front-back):</div>
+            <div>{deviceOrientation.beta?.toFixed(1) || 'N/A'}</div>
+            
+            <div>γ (left-right):</div>
+            <div>{deviceOrientation.gamma?.toFixed(1) || 'N/A'}</div>
             
             <div>Current Facing:</div>
             <div>{facing}</div>
@@ -513,6 +652,9 @@ export default function InstaFrameCameraImage({ className = "" }) {
             
             <div>Aspect Ratio:</div>
             <div>{(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
+            
+            <div>Auto-Rotate Supported:</div>
+            <div>{isDeviceOrientationSupported ? 'Yes' : 'No'}</div>
           </div>
 
           <div className="mt-4 mb-2 font-semibold">Tune frame placement (OUTPUT 1080x1920)</div>
