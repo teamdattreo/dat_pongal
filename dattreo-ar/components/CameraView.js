@@ -210,17 +210,18 @@ export default function InstaFrameCameraImage({ className = "" }) {
           streamRef.current = null;
         }
         
-        // Get available camera devices to find the best one
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(device => device.kind === 'videoinput');
-        
-        // Try to get user-facing camera first
+        // Try to get the widest field of view (least zoomed) camera
         const constraints = {
           video: {
             facingMode: facing,
-            // Let the device choose the best resolution
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            // Request a resolution that fits well in the preview window
+            // Use exact constraints for better control
+            width: { min: 640, ideal: 1280, max: 1920 },
+            height: { min: 480, ideal: 720, max: 1080 },
+            // Try to get the widest aspect ratio (less zoom)
+            aspectRatio: { ideal: 4/3 }, // Common for wider FOV
+            // Disable any digital zoom
+            zoom: false,
           },
           audio: false,
         };
@@ -241,13 +242,35 @@ export default function InstaFrameCameraImage({ className = "" }) {
             if (videoRef.current) {
               const { videoWidth, videoHeight } = videoRef.current;
               setCameraResolution({ width: videoWidth, height: videoHeight });
+              console.log(`Camera resolution: ${videoWidth}x${videoHeight}`);
             }
           };
           
           await videoRef.current.play();
         }
       } catch (e) {
-        setError(e?.message || "Could not access camera.");
+        console.error("Camera error:", e);
+        // Try with simpler constraints if the first attempt fails
+        try {
+          const fallbackConstraints = {
+            video: {
+              facingMode: facing,
+              // Minimal constraints to get any camera
+            },
+            audio: false,
+          };
+          
+          const stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+          if (!cancelled) {
+            streamRef.current = stream;
+            if (videoRef.current) {
+              videoRef.current.srcObject = stream;
+              await videoRef.current.play();
+            }
+          }
+        } catch (fallbackError) {
+          setError(fallbackError?.message || "Could not access camera.");
+        }
       }
     }
 
@@ -424,17 +447,23 @@ export default function InstaFrameCameraImage({ className = "" }) {
             }}
           >
             {!capturedPhotoUrl ? (
-              <video
-                ref={videoRef}
-                className="h-full w-full object-cover"
-                style={{
-                  transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
-                  transformOrigin: "center",
-                }}
-                playsInline
-                muted
-                autoPlay
-              />
+              <div className="relative h-full w-full">
+                <video
+                  ref={videoRef}
+                  className="h-full w-full object-contain"
+                  style={{
+                    transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
+                    transformOrigin: "center",
+                  }}
+                  playsInline
+                  muted
+                  autoPlay
+                />
+                {/* Optional: Add a subtle border to show the full camera view */}
+                {debug && (
+                  <div className="absolute inset-0 border border-blue-400/50 pointer-events-none" />
+                )}
+              </div>
             ) : (
               <img src={capturedPhotoUrl} className="h-full w-full object-cover" alt="Captured" />
             )}
@@ -460,6 +489,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Camera: {cameraResolution.width}x{cameraResolution.height}</div>
             <div>Orientation: {getScreenOrientation()}°</div>
             <div>Facing: {facing}</div>
+            <div>Aspect Ratio: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
           </div>
         )}
 
@@ -514,6 +544,9 @@ export default function InstaFrameCameraImage({ className = "" }) {
             
             <div>Video Ready:</div>
             <div>{videoRef.current?.videoWidth ? "Yes" : "No"}</div>
+            
+            <div>Aspect Ratio:</div>
+            <div>{(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
           </div>
 
           <div className="mt-4 mb-2 font-semibold">Tune frame placement (OUTPUT 1080x1920)</div>
