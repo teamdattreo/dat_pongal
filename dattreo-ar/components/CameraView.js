@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 const ASSETS = {
-  bg: "/assets/newframe.png",
+  bg: "/assets/Framme.jpeg",
 };
 
 const OUT = { W: 1080, H: 1920 };
