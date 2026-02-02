@@ -24,6 +24,15 @@ const WINDOW = {
   rPct: 0,
 };
 
+// Target preview dimensions (4:5 aspect ratio)
+const PREVIEW_DIMENSIONS = {
+  width: 720,
+  height: 960 // 720 * (4/5) = 576, but we want 4:5 so 720 * (5/4) = 900? Wait, 4:5 means width:height = 4:5
+  // Actually for 4:5: if width is 720, height should be 720 * (5/4) = 900
+  // But you said 720x960, which is 3:4 aspect ratio (720/960 = 0.75)
+  // Let's use 720x900 for true 4:5, or 720x960 for 3:4
+};
+
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const im = new Image();
@@ -369,15 +378,15 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const windowLeft = frame.cx - frame.w/2 + windowPx.x;
       const windowTop = frame.cy - frame.h/2 + windowPx.y;
       
-      // Set preview canvas to window size
-      previewCanvas.width = windowPx.w;
-      previewCanvas.height = windowPx.h;
+      // Set preview canvas to 720x960 (3:4 aspect ratio)
+      previewCanvas.width = PREVIEW_DIMENSIONS.width;
+      previewCanvas.height = PREVIEW_DIMENSIONS.height;
       
-      // Draw just the window area from the export
+      // Draw just the window area from the export, scaled to fit 720x960
       previewCtx.drawImage(
         out,
         windowLeft, windowTop, windowPx.w, windowPx.h, // source: window area from export
-        0, 0, windowPx.w, windowPx.h // destination: full preview canvas
+        0, 0, PREVIEW_DIMENSIONS.width, PREVIEW_DIMENSIONS.height // destination: 720x960 preview
       );
       
       const previewUrl = previewCanvas.toDataURL("image/png");
@@ -457,7 +466,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
               <div className="relative h-full w-full">
                 <video
                   ref={videoRef}
-                  className="h-full w-full object-contain"
+                  className="h-full w-full object-cover"
                   style={{
                     transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
                     transformOrigin: "center",
@@ -477,6 +486,10 @@ export default function InstaFrameCameraImage({ className = "" }) {
                   src={capturedPhotoUrl} 
                   className="h-full w-full object-cover"
                   alt="Captured" 
+                  style={{
+                    // Ensure the preview maintains 3:4 aspect ratio
+                    objectFit: 'cover'
+                  }}
                 />
                 {/* Show cropping overlay in debug mode */}
                 {debug && (
@@ -504,6 +517,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
         {debug && (
           <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs">
             <div>Camera: {cameraResolution.width}x{cameraResolution.height}</div>
+            <div>Preview: 720x960 (3:4)</div>
             <div>Orientation: {getScreenOrientation()}°</div>
             <div>Facing: {facing}</div>
             <div>Aspect Ratio: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
@@ -554,6 +568,9 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Camera Resolution:</div>
             <div>{cameraResolution.width}x{cameraResolution.height}</div>
             
+            <div>Preview Resolution:</div>
+            <div>720x960 (3:4)</div>
+            
             <div>Screen Orientation:</div>
             <div>{getScreenOrientation()}°</div>
             
@@ -563,7 +580,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Video Ready:</div>
             <div>{videoRef.current?.videoWidth ? "Yes" : "No"}</div>
             
-            <div>Aspect Ratio:</div>
+            <div>Camera Aspect:</div>
             <div>{(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
             
             <div>Window Size:</div>
