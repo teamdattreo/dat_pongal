@@ -17,9 +17,9 @@ const FRAME = {
 };
 
 const WINDOW = {
-  xPct: 0.03,
-  yPct: 0.056,
-  wPct: 0.92,
+  xPct: 0.038,
+  yPct: -0.007,
+  wPct: 0.93,
   hPct: 0.75,
   rPct: 0,
 };
