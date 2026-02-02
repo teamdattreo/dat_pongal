@@ -314,23 +314,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
       // 2. Auto-rotate if needed (landscape to portrait)
       const finalSnapshot = autoRotateForPortrait(rawSnapshot);
       
-      // 3. Create photo-only canvas for preview - use actual photo dimensions
-      const photoCanvas = document.createElement("canvas");
-      
-      // Use the rotated snapshot dimensions for the preview
-      photoCanvas.width = finalSnapshot.width;
-      photoCanvas.height = finalSnapshot.height;
-      const pctx = photoCanvas.getContext("2d");
-      
-      // Fill with black background and draw the photo
-      pctx.fillStyle = "#000";
-      pctx.fillRect(0, 0, photoCanvas.width, photoCanvas.height);
-      pctx.drawImage(finalSnapshot, 0, 0);
-      
-      const photoUrl = photoCanvas.toDataURL("image/png");
-      setCapturedPhotoUrl(photoUrl);
-
-      // 4. Create full export canvas with background
+      // 3. Create full export canvas with background (this is what gets downloaded)
       const out = document.createElement("canvas");
       out.width = OUT.W;
       out.height = OUT.H;
@@ -375,6 +359,29 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
       const finalExportUrl = out.toDataURL("image/png");
       setExportUrl(finalExportUrl);
+      
+      // 4. Create a preview that shows exactly what's in the frame window
+      // Extract just the window area from the export canvas
+      const previewCanvas = document.createElement("canvas");
+      const previewCtx = previewCanvas.getContext("2d");
+      
+      // Calculate the window position on the final export canvas
+      const windowLeft = frame.cx - frame.w/2 + windowPx.x;
+      const windowTop = frame.cy - frame.h/2 + windowPx.y;
+      
+      // Set preview canvas to window size
+      previewCanvas.width = windowPx.w;
+      previewCanvas.height = windowPx.h;
+      
+      // Draw just the window area from the export
+      previewCtx.drawImage(
+        out,
+        windowLeft, windowTop, windowPx.w, windowPx.h, // source: window area from export
+        0, 0, windowPx.w, windowPx.h // destination: full preview canvas
+      );
+      
+      const previewUrl = previewCanvas.toDataURL("image/png");
+      setCapturedPhotoUrl(previewUrl);
       
       // Auto-download
       triggerDownload(finalExportUrl, "insta_frame");
@@ -465,7 +472,17 @@ export default function InstaFrameCameraImage({ className = "" }) {
                 )}
               </div>
             ) : (
-              <img src={capturedPhotoUrl} className="h-full w-full object-cover" alt="Captured" />
+              <div className="relative h-full w-full">
+                <img 
+                  src={capturedPhotoUrl} 
+                  className="h-full w-full object-cover"
+                  alt="Captured" 
+                />
+                {/* Show cropping overlay in debug mode */}
+                {debug && (
+                  <div className="absolute inset-0 border-2 border-red-500 pointer-events-none" />
+                )}
+              </div>
             )}
 
             {debug ? (
@@ -490,6 +507,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Orientation: {getScreenOrientation()}°</div>
             <div>Facing: {facing}</div>
             <div>Aspect Ratio: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
+            <div>Window Size: {Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
           </div>
         )}
 
@@ -547,6 +565,9 @@ export default function InstaFrameCameraImage({ className = "" }) {
             
             <div>Aspect Ratio:</div>
             <div>{(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
+            
+            <div>Window Size:</div>
+            <div>{Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
           </div>
 
           <div className="mt-4 mb-2 font-semibold">Tune frame placement (OUTPUT 1080x1920)</div>
@@ -600,6 +621,72 @@ export default function InstaFrameCameraImage({ className = "" }) {
                 step="0.1"
                 value={frame.rotateDeg}
                 onChange={(e) => setFrame((p) => ({ ...p, rotateDeg: +e.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 mb-2 font-semibold">Tune window inside frame (percent of frame)</div>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1">
+              xPct: {(WINDOW.xPct * 100).toFixed(1)}%
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.1"
+                value={WINDOW.xPct * 100}
+                onChange={(e) => {
+                  const newX = parseFloat(e.target.value) / 100;
+                  // Update WINDOW object
+                  WINDOW.xPct = newX;
+                  // Trigger re-render by updating frame state
+                  setFrame({...frame});
+                }}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              yPct: {(WINDOW.yPct * 100).toFixed(1)}%
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="0.1"
+                value={WINDOW.yPct * 100}
+                onChange={(e) => {
+                  const newY = parseFloat(e.target.value) / 100;
+                  WINDOW.yPct = newY;
+                  setFrame({...frame});
+                }}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              wPct: {(WINDOW.wPct * 100).toFixed(1)}%
+              <input
+                type="range"
+                min="80"
+                max="100"
+                step="0.1"
+                value={WINDOW.wPct * 100}
+                onChange={(e) => {
+                  const newW = parseFloat(e.target.value) / 100;
+                  WINDOW.wPct = newW;
+                  setFrame({...frame});
+                }}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              hPct: {(WINDOW.hPct * 100).toFixed(1)}%
+              <input
+                type="range"
+                min="60"
+                max="90"
+                step="0.1"
+                value={WINDOW.hPct * 100}
+                onChange={(e) => {
+                  const newH = parseFloat(e.target.value) / 100;
+                  WINDOW.hPct = newH;
+                  setFrame({...frame});
+                }}
               />
             </label>
           </div>
