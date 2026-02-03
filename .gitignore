@@ -1,2 +1,2 @@
-/dattreo-ar/node_modules
-/dattreo-ar/.next
+node_modules/
+.next/
