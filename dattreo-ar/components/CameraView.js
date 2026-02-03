@@ -178,7 +178,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
-  const [facing, setFacing] = useState("user");
+  const [facing, setFacing] = useState("environment");
   const [bgImg, setBgImg] = useState(null);
 
   const [error, setError] = useState("");
@@ -319,11 +319,8 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
       console.log(`Capturing at: ${video.videoWidth}x${video.videoHeight}`);
 
-      // 1. Capture the raw video frame (mirrored for front camera)
-      const rawSnapshot = snapshotMirroredVideo(video, facing === "user");
-      
-      // 2. Auto-rotate if needed (landscape to portrait)
-      const finalSnapshot = autoRotateForPortrait(rawSnapshot);
+      // 1. Capture the raw video frame without mirroring or rotation
+      const rawSnapshot = snapshotMirroredVideo(video, false);
       
       // 3. Create full export canvas with background (this is what gets downloaded)
       const out = document.createElement("canvas");
@@ -362,8 +359,8 @@ export default function InstaFrameCameraImage({ className = "" }) {
       ctx.fillStyle = "#000";
       ctx.fillRect(wx, wy, ww, wh);
       
-      // Draw the final rotated photo without cropping (fit inside)
-      drawContain(ctx, finalSnapshot, wx, wy, ww, wh);
+      // Draw the raw photo without cropping (fit inside)
+      drawContain(ctx, rawSnapshot, wx, wy, ww, wh);
       ctx.restore();
 
       ctx.restore();
