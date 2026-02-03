@@ -391,11 +391,27 @@ export default function InstaFrameCameraImage({ className = "" }) {
       previewCanvas.width = PREVIEW_DIMENSIONS.width;
       previewCanvas.height = PREVIEW_DIMENSIONS.height;
       
-      // Draw just the window area from the export, scaled to fit 720x960
-      previewCtx.drawImage(
+      // Fill background white so any letterboxing is white
+      previewCtx.fillStyle = "#fff";
+      previewCtx.fillRect(0, 0, PREVIEW_DIMENSIONS.width, PREVIEW_DIMENSIONS.height);
+
+      // Draw just the window area from the export, preserving aspect ratio (no stretch)
+      const windowCanvas = document.createElement("canvas");
+      windowCanvas.width = Math.max(1, Math.round(windowPx.w));
+      windowCanvas.height = Math.max(1, Math.round(windowPx.h));
+      const windowCtx = windowCanvas.getContext("2d");
+      windowCtx.drawImage(
         out,
-        windowLeft, windowTop, windowPx.w, windowPx.h, // source: window area from export
-        0, 0, PREVIEW_DIMENSIONS.width, PREVIEW_DIMENSIONS.height // destination: 720x960 preview
+        windowLeft, windowTop, windowPx.w, windowPx.h,
+        0, 0, windowCanvas.width, windowCanvas.height
+      );
+
+      drawContain(
+        previewCtx,
+        windowCanvas,
+        0, 0,
+        PREVIEW_DIMENSIONS.width,
+        PREVIEW_DIMENSIONS.height
       );
       
       const previewUrl = previewCanvas.toDataURL("image/png");
