@@ -91,16 +91,14 @@ function triggerDownload(url, prefix) {
   a.remove();
 }
 
-// Use screen orientation instead of device orientation
+// Device orientation handling
 function getScreenOrientation() {
   if (typeof window === 'undefined') return 0;
   
-  // Check screen orientation API first (more reliable)
   if (window.screen?.orientation?.angle !== undefined) {
     return window.screen.orientation.angle;
   }
   
-  // Fallback to window orientation
   if (typeof window.orientation === 'number') {
     const angle = window.orientation;
     if (angle === 90) return 90;
@@ -109,16 +107,13 @@ function getScreenOrientation() {
     return 0;
   }
   
-  // Check based on window dimensions
   if (window.innerWidth > window.innerHeight) {
-    // Landscape
     return window.innerWidth > window.innerHeight * 1.5 ? 90 : 0;
   }
   
   return 0;
 }
 
-// Simple rotation function
 function rotateCanvas(sourceCanvas, angleDeg) {
   if (angleDeg === 0) return sourceCanvas;
   
@@ -126,7 +121,6 @@ function rotateCanvas(sourceCanvas, angleDeg) {
   const sin = Math.abs(Math.sin(angleRad));
   const cos = Math.abs(Math.cos(angleRad));
   
-  // Calculate new canvas dimensions
   const newWidth = Math.floor(
     sourceCanvas.width * cos + sourceCanvas.height * sin
   );
@@ -139,7 +133,6 @@ function rotateCanvas(sourceCanvas, angleDeg) {
   canvas.height = newHeight;
   const ctx = canvas.getContext("2d");
   
-  // Clear and rotate
   ctx.clearRect(0, 0, newWidth, newHeight);
   ctx.translate(newWidth / 2, newHeight / 2);
   ctx.rotate(angleRad);
@@ -152,7 +145,7 @@ function rotateCanvas(sourceCanvas, angleDeg) {
   return canvas;
 }
 
-// Auto-detect if photo needs rotation based on dimensions
+// Fixed auto-rotate logic for portrait
 function autoRotateForPortrait(capturedCanvas) {
   const { width, height } = capturedCanvas;
   
@@ -162,15 +155,21 @@ function autoRotateForPortrait(capturedCanvas) {
   }
   
   // If landscape (width > height), rotate to portrait
-  // Check which way to rotate based on device orientation
   const screenOrientation = getScreenOrientation();
   
-  if (screenOrientation === 90 || screenOrientation === -90) {
-    // Device is in landscape mode, rotate accordingly
-    return rotateCanvas(capturedCanvas, -screenOrientation);
+  console.log(`Screen orientation: ${screenOrientation}°`);
+  console.log(`Image dimensions: ${width}x${height}`);
+  
+  // Determine which way to rotate based on device orientation
+  if (screenOrientation === 90) {
+    // Device is in landscape left, rotate -90° to make portrait
+    return rotateCanvas(capturedCanvas, -90);
+  } else if (screenOrientation === -90) {
+    // Device is in landscape right, rotate 90° to make portrait
+    return rotateCanvas(capturedCanvas, 90);
   }
   
-  // Default: rotate 90 degrees clockwise
+  // Default: rotate 90° clockwise for landscape photos
   return rotateCanvas(capturedCanvas, 90);
 }
 
@@ -189,6 +188,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
   const [debug, setDebug] = useState(false);
   const [frame, setFrame] = useState(FRAME);
+  const [showFrame, setShowFrame] = useState(false); // Control when to show frame
   
   // Track camera resolution
   const [cameraResolution, setCameraResolution] = useState({ width: 0, height: 0 });
@@ -221,17 +221,12 @@ export default function InstaFrameCameraImage({ className = "" }) {
           streamRef.current = null;
         }
         
-        // Try to get the widest field of view (least zoomed) camera
         const constraints = {
           video: {
             facingMode: facing,
-            // Request a resolution that fits well in the preview window
-            // Use exact constraints for better control
             width: { min: 640, ideal: 1280, max: 1920 },
             height: { min: 480, ideal: 720, max: 1080 },
-            // Try to get the widest aspect ratio (less zoom)
-            aspectRatio: { ideal: 4/3 }, // Common for wider FOV
-            // Disable any digital zoom
+            aspectRatio: { ideal: 4/3 },
             zoom: false,
           },
           audio: false,
@@ -248,7 +243,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           
-          // Wait for video metadata to load
           videoRef.current.onloadedmetadata = () => {
             if (videoRef.current) {
               const { videoWidth, videoHeight } = videoRef.current;
@@ -261,13 +255,9 @@ export default function InstaFrameCameraImage({ className = "" }) {
         }
       } catch (e) {
         console.error("Camera error:", e);
-        // Try with simpler constraints if the first attempt fails
         try {
           const fallbackConstraints = {
-            video: {
-              facingMode: facing,
-              // Minimal constraints to get any camera
-            },
+            video: { facingMode: facing },
             audio: false,
           };
           
@@ -319,10 +309,13 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
       console.log(`Capturing at: ${video.videoWidth}x${video.videoHeight}`);
 
-      // 1. Capture the raw video frame without mirroring or rotation
-      const rawSnapshot = snapshotMirroredVideo(video, false);
+      // 1. Capture the raw video frame (mirrored for front camera only)
+      const rawSnapshot = snapshotMirroredVideo(video, facing === "user");
       
-      // 3. Create full export canvas with background (this is what gets downloaded)
+      // 2. Auto-rotate if needed (landscape to portrait)
+      const finalSnapshot = autoRotateForPortrait(rawSnapshot);
+      
+      // 3. Create full export canvas with background
       const out = document.createElement("canvas");
       out.width = OUT.W;
       out.height = OUT.H;
@@ -359,8 +352,8 @@ export default function InstaFrameCameraImage({ className = "" }) {
       ctx.fillStyle = "#000";
       ctx.fillRect(wx, wy, ww, wh);
       
-      // Draw the raw photo without cropping (fit inside)
-      drawContain(ctx, rawSnapshot, wx, wy, ww, wh);
+      // Draw the rotated photo
+      drawContain(ctx, finalSnapshot, wx, wy, ww, wh);
       ctx.restore();
 
       ctx.restore();
@@ -368,31 +361,34 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const finalExportUrl = out.toDataURL("image/png");
       setExportUrl(finalExportUrl);
       
-      // 4. Create a preview that shows exactly what's in the frame window
-      // Extract just the window area from the export canvas without scaling
+      // 4. Create preview image (full frame with photo)
       const previewCanvas = document.createElement("canvas");
       const previewCtx = previewCanvas.getContext("2d");
       
-      // Calculate the window position on the final export canvas
+      // Set preview to same size as window for display
+      previewCanvas.width = Math.round(windowPx.w);
+      previewCanvas.height = Math.round(windowPx.h);
+      
+      // Draw the photo area from the export
       const windowLeft = frame.cx - frame.w/2 + windowPx.x;
       const windowTop = frame.cy - frame.h/2 + windowPx.y;
       
-      // Match preview canvas to the exact window size to avoid distortion
-      previewCanvas.width = Math.round(windowPx.w);
-      previewCanvas.height = Math.round(windowPx.h);
-
-      // Draw just the window area from the export at 1:1 scale
       previewCtx.drawImage(
         out,
-        windowLeft, windowTop, windowPx.w, windowPx.h, // source: window area from export
-        0, 0, previewCanvas.width, previewCanvas.height // destination: exact window size
+        windowLeft, windowTop, windowPx.w, windowPx.h,
+        0, 0, previewCanvas.width, previewCanvas.height
       );
       
       const previewUrl = previewCanvas.toDataURL("image/png");
       setCapturedPhotoUrl(previewUrl);
       
-      // Auto-download
-      triggerDownload(finalExportUrl, "insta_frame");
+      // Show the frame after capture
+      setShowFrame(true);
+      
+      // Auto-download the full frame
+      setTimeout(() => {
+        triggerDownload(finalExportUrl, "insta_frame");
+      }, 500);
       
     } catch (e) {
       setError(e?.message || String(e));
@@ -405,6 +401,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
   function retake() {
     setCapturedPhotoUrl("");
     setExportUrl("");
+    setShowFrame(false); // Hide frame when retaking
   }
 
   // DOM percentages for positioning
@@ -431,81 +428,90 @@ export default function InstaFrameCameraImage({ className = "" }) {
   return (
     <div className={`w-full ${className}`}>
       <div className="relative mx-auto w-full max-w-[420px] sm:max-w-[520px] overflow-hidden rounded-2xl bg-white shadow-2xl aspect-[9/16]">
-        {/* BG */}
-        {bgImg ? (
+        {/* BG - Only show after capture */}
+        {showFrame && bgImg ? (
           <img src={ASSETS.bg} alt="" className="absolute inset-0 h-full w-full object-cover" />
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-b from-orange-500 to-yellow-400" />
+          <div className="absolute inset-0 bg-black" />
         )}
 
-        {/* Frame group */}
-        <div
-          className="absolute"
-          style={{
-            left: `${framePct.cx}%`,
-            top: `${framePct.cy}%`,
-            width: `${framePct.w}%`,
-            height: `${framePct.h}%`,
-            transform: `translate(-50%, -50%) rotate(${framePct.rot}deg)`,
-            filter: "drop-shadow(0px 18px 35px rgba(0,0,0,0.28))",
-          }}
-        >
-          {/* Camera window */}
+        {/* Frame group - Only show after capture */}
+        {showFrame && (
           <div
-            className="absolute overflow-hidden"
+            className="absolute"
             style={{
-              left: `${winPct.left}%`,
-              top: `${winPct.top}%`,
-              width: `${winPct.width}%`,
-              height: `${winPct.height}%`,
-              borderRadius: `${winPct.radius}%`,
+              left: `${framePct.cx}%`,
+              top: `${framePct.cy}%`,
+              width: `${framePct.w}%`,
+              height: `${framePct.h}%`,
+              transform: `translate(-50%, -50%) rotate(${framePct.rot}deg)`,
+              filter: "drop-shadow(0px 18px 35px rgba(0,0,0,0.28))",
             }}
           >
-            {!capturedPhotoUrl ? (
-              <div className="relative h-full w-full">
-                <video
-                  ref={videoRef}
-                  className="h-full w-full object-contain bg-black"
-                  style={{
-                    transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
-                    transformOrigin: "center",
-                  }}
-                  playsInline
-                  muted
-                  autoPlay
-                />
-                {/* Optional: Add a subtle border to show the full camera view */}
-                {debug && (
-                  <div className="absolute inset-0 border border-blue-400/50 pointer-events-none" />
-                )}
-              </div>
-            ) : (
-              <div className="relative h-full w-full">
-                <img 
-                  src={capturedPhotoUrl} 
-                  className="h-full w-full object-contain bg-black"
-                  alt="Captured" 
-                  style={{
-                    // Do not crop the captured image
-                    objectFit: 'contain'
-                  }}
-                />
-                {/* Show cropping overlay in debug mode */}
-                {debug && (
-                  <div className="absolute inset-0 border-2 border-red-500 pointer-events-none" />
-                )}
-              </div>
-            )}
-
-            {debug ? (
-              <div className="absolute inset-0 border-4 border-lime-400/90 pointer-events-none" />
-            ) : null}
+            {/* Camera window */}
+            <div
+              className="absolute overflow-hidden"
+              style={{
+                left: `${winPct.left}%`,
+                top: `${winPct.top}%`,
+                width: `${winPct.width}%`,
+                height: `${winPct.height}%`,
+                borderRadius: `${winPct.radius}%`,
+              }}
+            >
+              {!capturedPhotoUrl ? (
+                <div className="relative h-full w-full">
+                  <video
+                    ref={videoRef}
+                    className="h-full w-full object-contain bg-black"
+                    style={{
+                      transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
+                      transformOrigin: "center",
+                    }}
+                    playsInline
+                    muted
+                    autoPlay
+                  />
+                  {debug && (
+                    <div className="absolute inset-0 border border-blue-400/50 pointer-events-none" />
+                  )}
+                </div>
+              ) : (
+                <div className="relative h-full w-full">
+                  <img 
+                    src={capturedPhotoUrl} 
+                    className="h-full w-full object-contain bg-black"
+                    alt="Captured" 
+                  />
+                  {debug && (
+                    <div className="absolute inset-0 border-2 border-red-500 pointer-events-none" />
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* Full screen camera view when not showing frame */}
+        {!showFrame && (
+          <div className="absolute inset-0 bg-black">
+            <video
+              ref={videoRef}
+              className="h-full w-full object-contain"
+              style={{
+                transform: facing === "user" ? "scaleX(-1)" : "scaleX(1)",
+                transformOrigin: "center",
+              }}
+              playsInline
+              muted
+              autoPlay
+            />
+          </div>
+        )}
 
         {/* Error */}
         {error ? (
-          <div className="absolute inset-0 grid place-items-center bg-black/70 p-6 text-center">
+          <div className="absolute inset-0 grid place-items-center bg-black/70 p-6 text-center z-50">
             <div className="max-w-xs rounded-xl border border-red-500/30 bg-red-950/40 p-4 text-sm text-red-200 whitespace-pre-wrap">
               {error}
             </div>
@@ -514,7 +520,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
         {/* Debug info */}
         {debug && (
-          <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs">
+          <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs z-40">
             <div>Camera: {cameraResolution.width}x{cameraResolution.height}</div>
             <div>Preview: {Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
             <div>Orientation: {getScreenOrientation()}°</div>
@@ -525,36 +531,67 @@ export default function InstaFrameCameraImage({ className = "" }) {
         )}
 
         {/* Controls */}
-        <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3">          
+        <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3 z-30">          
+          {/* Flip/Rotate Camera Button - Circle icon */}
           <button
             type="button"
             onClick={() => setFacing((v) => (v === "user" ? "environment" : "user"))}
-            className="rounded-xl bg-white/90 px-3 py-2 text-sm font-semibold text-neutral-900"
+            className="h-12 w-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg hover:bg-white transition-colors"
             title="Flip camera"
           >
-            Flip
+            <svg className="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
           </button>
+          
+          {/* Capture Button */}
           <button
             type="button"
             onClick={capture}
             disabled={busy}
-            className="h-14 w-14 rounded-full border-4 border-white/80 bg-white shadow-xl disabled:opacity-70"
+            className="h-14 w-14 rounded-full border-4 border-white/80 bg-white shadow-xl disabled:opacity-70 hover:scale-105 transition-transform"
             title="Capture"
           />
-          <button
-            type="button"
-            onClick={retake}
-            disabled={!capturedPhotoUrl}
-            className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-          >
-            Retake
-          </button>
+          
+          {/* Retake Button - Only show after capture */}
+          {capturedPhotoUrl && (
+            <button
+              type="button"
+              onClick={retake}
+              disabled={busy}
+              className="h-12 w-12 rounded-full bg-rose-600 flex items-center justify-center shadow-lg hover:bg-rose-700 transition-colors disabled:opacity-60"
+              title="Retake"
+            >
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+              </svg>
+            </button>
+          )}
+          
+          {/* Download Button - Only show after capture */}
+          {capturedPhotoUrl && (
+            <button
+              type="button"
+              onClick={() => exportUrl && triggerDownload(exportUrl, "insta_frame")}
+              disabled={!exportUrl || busy}
+              className="h-12 w-12 rounded-full bg-green-600 flex items-center justify-center shadow-lg hover:bg-green-700 transition-colors disabled:opacity-60"
+              title="Download again"
+            >
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+              </svg>
+            </button>
+          )}
+          
+          {/* Debug Toggle Button */}
           <button
             type="button"
             onClick={() => setDebug(v => !v)}
-            className="rounded-xl bg-gray-700 px-3 py-2 text-sm font-semibold text-white"
+            className="h-12 w-12 rounded-full bg-gray-700 flex items-center justify-center shadow-lg hover:bg-gray-800 transition-colors"
           >
-            {debug ? "Hide Debug" : "Debug"}
+            <span className="text-white text-sm font-semibold">
+              {debug ? "D" : "D"}
+            </span>
           </button>
         </div>
       </div>
@@ -653,9 +690,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
                 value={WINDOW.xPct * 100}
                 onChange={(e) => {
                   const newX = parseFloat(e.target.value) / 100;
-                  // Update WINDOW object
                   WINDOW.xPct = newX;
-                  // Trigger re-render by updating frame state
                   setFrame({...frame});
                 }}
               />
