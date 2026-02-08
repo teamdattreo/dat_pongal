@@ -91,27 +91,139 @@ function triggerDownload(url, prefix) {
   a.remove();
 }
 
-// Device orientation handling
+// Enhanced screen orientation detection
 function getScreenOrientation() {
   if (typeof window === 'undefined') return 0;
   
+  // Try modern API first
   if (window.screen?.orientation?.angle !== undefined) {
     return window.screen.orientation.angle;
   }
   
+  // Legacy orientation
   if (typeof window.orientation === 'number') {
-    const angle = window.orientation;
-    if (angle === 90) return 90;
-    if (angle === -90) return -90;
-    if (angle === 180) return 180;
-    return 0;
+    return window.orientation;
   }
   
+  // Fallback based on window dimensions
   if (window.innerWidth > window.innerHeight) {
-    return window.innerWidth > window.innerHeight * 1.5 ? 90 : 0;
+    // Check if it's landscape left or right (approximation)
+    return window.innerWidth > window.innerHeight ? 90 : -90;
   }
   
   return 0;
+}
+
+// Device Orientation API helper
+async function getDeviceOrientationPermission() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && 
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const permission = await DeviceOrientationEvent.requestPermission();
+      return permission === 'granted';
+    } catch (error) {
+      console.error('Device orientation permission error:', error);
+      return false;
+    }
+  }
+  
+  // If no permission needed or API not available
+  return true;
+}
+
+// Device orientation tracking
+function useDeviceOrientation() {
+  const [orientation, setOrientation] = useState({
+    alpha: 0,   // compass direction (0-360)
+    beta: 0,    // front-to-back tilt (-180 to 180)
+    gamma: 0,   // left-to-right tilt (-90 to 90)
+    absolute: false,
+    permissionGranted: false,
+    hasDeviceOrientation: false
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    let orientationHandler = null;
+
+    async function init() {
+      try {
+        // Check if device orientation is available
+        if (!('DeviceOrientationEvent' in window)) {
+          console.log('DeviceOrientationEvent not supported');
+          return;
+        }
+
+        // Request permission on iOS 13+
+        const hasPermission = await getDeviceOrientationPermission();
+        
+        if (!mounted) return;
+        
+        if (!hasPermission) {
+          console.log('Device orientation permission denied');
+          setOrientation(prev => ({
+            ...prev,
+            permissionGranted: false,
+            hasDeviceOrientation: false
+          }));
+          return;
+        }
+
+        orientationHandler = (event) => {
+          if (!mounted) return;
+          
+          setOrientation({
+            alpha: event.alpha || 0,
+            beta: event.beta || 0,
+            gamma: event.gamma || 0,
+            absolute: event.absolute || false,
+            permissionGranted: true,
+            hasDeviceOrientation: true
+          });
+        };
+
+        window.addEventListener('deviceorientation', orientationHandler);
+        
+        setOrientation(prev => ({
+          ...prev,
+          permissionGranted: true,
+          hasDeviceOrientation: true
+        }));
+
+        // Also listen for screen orientation changes
+        const handleScreenOrientationChange = () => {
+          if (!mounted) return;
+          // Force update to get fresh screen orientation
+          setOrientation(prev => ({ ...prev }));
+        };
+
+        window.addEventListener('orientationchange', handleScreenOrientationChange);
+
+        return () => {
+          window.removeEventListener('orientationchange', handleScreenOrientationChange);
+        };
+      } catch (error) {
+        console.error('Device orientation initialization error:', error);
+        if (mounted) {
+          setOrientation(prev => ({
+            ...prev,
+            hasDeviceOrientation: false
+          }));
+        }
+      }
+    }
+
+    init();
+
+    return () => {
+      mounted = false;
+      if (orientationHandler) {
+        window.removeEventListener('deviceorientation', orientationHandler);
+      }
+    };
+  }, []);
+
+  return orientation;
 }
 
 function rotateCanvas(sourceCanvas, angleDeg) {
@@ -145,32 +257,106 @@ function rotateCanvas(sourceCanvas, angleDeg) {
   return canvas;
 }
 
-// Fixed auto-rotate logic for portrait
-function autoRotateForPortrait(capturedCanvas) {
-  const { width, height } = capturedCanvas;
+// Smart auto-rotate based on device orientation
+function determineRotationAngle(canvas, screenOrientation, deviceOrientation, facingMode) {
+  const { width, height } = canvas;
+  const { beta, gamma } = deviceOrientation;
+  const isFrontCamera = facingMode === 'user';
   
-  // If already portrait (height >= width), no rotation needed
+  console.log('Rotation calculation:', {
+    screenOrientation,
+    beta,
+    gamma,
+    facingMode,
+    imageSize: `${width}x${height}`,
+    isPortrait: height >= width
+  });
+
+  // If image is already portrait, check if it needs correction
   if (height >= width) {
-    return capturedCanvas;
+    // Check if device is upside down
+    if (Math.abs(beta) > 135) {
+      return 180; // Upside down
+    }
+    return 0; // Already correct portrait
   }
-  
-  // If landscape (width > height), rotate to portrait
+
+  // Image is landscape - determine correct rotation
+  if (screenOrientation === 90) {
+    // Landscape left (device rotated counter-clockwise)
+    if (isFrontCamera) {
+      // Front camera needs opposite rotation
+      return 90;
+    } else {
+      return -90;
+    }
+  } 
+  else if (screenOrientation === -90) {
+    // Landscape right (device rotated clockwise)
+    if (isFrontCamera) {
+      return -90;
+    } else {
+      return 90;
+    }
+  }
+  else if (screenOrientation === 180) {
+    // Upside down
+    return 180;
+  }
+  else if (screenOrientation === 0) {
+    // Portrait orientation but landscape image
+    // Use device tilt to determine rotation
+    if (gamma > 45) {
+      // Device tilted to the right
+      return isFrontCamera ? -90 : 90;
+    } else if (gamma < -45) {
+      // Device tilted to the left
+      return isFrontCamera ? 90 : -90;
+    } else {
+      // Default rotation for landscape in portrait mode
+      return 90;
+    }
+  }
+
+  // Fallback: rotate based on image dimensions
+  if (width > height) {
+    return 90;
+  }
+
+  return 0;
+}
+
+async function autoRotateForPortrait(canvas, facingMode, deviceOrientationData) {
+  const { width, height } = canvas;
   const screenOrientation = getScreenOrientation();
   
-  console.log(`Screen orientation: ${screenOrientation}°`);
-  console.log(`Image dimensions: ${width}x${height}`);
-  
-  // Determine which way to rotate based on device orientation
-  if (screenOrientation === 90) {
-    // Device is in landscape left, rotate -90° to make portrait
-    return rotateCanvas(capturedCanvas, -90);
-  } else if (screenOrientation === -90) {
-    // Device is in landscape right, rotate 90° to make portrait
-    return rotateCanvas(capturedCanvas, 90);
+  // Get device orientation if not provided
+  let deviceOrientation = deviceOrientationData;
+  if (!deviceOrientation) {
+    deviceOrientation = {
+      alpha: 0,
+      beta: 0,
+      gamma: 0,
+      absolute: false
+    };
   }
-  
-  // Default: rotate 90° clockwise for landscape photos
-  return rotateCanvas(capturedCanvas, 90);
+
+  // Determine rotation angle
+  const rotationAngle = determineRotationAngle(
+    canvas, 
+    screenOrientation, 
+    deviceOrientation, 
+    facingMode
+  );
+
+  console.log('Applying rotation angle:', rotationAngle);
+
+  // Apply rotation if needed
+  if (rotationAngle !== 0) {
+    return rotateCanvas(canvas, rotationAngle);
+  }
+
+  return canvas;
 }
 
 export default function InstaFrameCameraImage({ className = "" }) {
@@ -188,10 +374,32 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
   const [debug, setDebug] = useState(false);
   const [frame, setFrame] = useState(FRAME);
-  const [showFrame, setShowFrame] = useState(false); // Control when to show frame
+  const [showFrame, setShowFrame] = useState(false);
   
-  // Track camera resolution
   const [cameraResolution, setCameraResolution] = useState({ width: 0, height: 0 });
+  
+  // Use device orientation hook
+  const deviceOrientation = useDeviceOrientation();
+  
+  // Track screen orientation separately
+  const [screenOrientation, setScreenOrientation] = useState(getScreenOrientation());
+
+  // Update screen orientation on changes
+  useEffect(() => {
+    const handleOrientationChange = () => {
+      const newOrientation = getScreenOrientation();
+      setScreenOrientation(newOrientation);
+      console.log('Screen orientation changed:', newOrientation);
+    };
+
+    window.addEventListener('orientationchange', handleOrientationChange);
+    window.addEventListener('resize', handleOrientationChange);
+
+    return () => {
+      window.removeEventListener('orientationchange', handleOrientationChange);
+      window.removeEventListener('resize', handleOrientationChange);
+    };
+  }, []);
 
   // Load background
   useEffect(() => {
@@ -210,7 +418,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
     };
   }, []);
 
-  // Start camera with default device resolution
+  // Start camera
   useEffect(() => {
     let cancelled = false;
     async function start() {
@@ -295,7 +503,24 @@ export default function InstaFrameCameraImage({ className = "" }) {
     return { x, y, w, h, r };
   }, [frame.w, frame.h]);
 
-  // Capture photo with auto-rotation
+  // Request device orientation permission
+  const requestOrientationPermission = async () => {
+    setBusy(true);
+    try {
+      const granted = await getDeviceOrientationPermission();
+      if (granted) {
+        alert("Device orientation permission granted! You can now take photos with correct rotation.");
+      } else {
+        alert("Device orientation permission is required for proper photo rotation.");
+      }
+    } catch (error) {
+      console.error("Permission request error:", error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Capture photo with advanced auto-rotation
   async function capture() {
     if (!videoRef.current || busy) return;
     setBusy(true);
@@ -308,12 +533,18 @@ export default function InstaFrameCameraImage({ className = "" }) {
       }
 
       console.log(`Capturing at: ${video.videoWidth}x${video.videoHeight}`);
+      console.log('Current device orientation:', deviceOrientation);
+      console.log('Current screen orientation:', screenOrientation);
 
-      // 1. Capture the raw video frame (mirrored for front camera only)
+      // 1. Capture the raw video frame
       const rawSnapshot = snapshotMirroredVideo(video, facing === "user");
       
-      // 2. Auto-rotate if needed (landscape to portrait)
-      const finalSnapshot = autoRotateForPortrait(rawSnapshot);
+      // 2. Auto-rotate using device orientation
+      const finalSnapshot = await autoRotateForPortrait(
+        rawSnapshot, 
+        facing, 
+        deviceOrientation
+      );
       
       // 3. Create full export canvas with background
       const out = document.createElement("canvas");
@@ -361,15 +592,13 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const finalExportUrl = out.toDataURL("image/png");
       setExportUrl(finalExportUrl);
       
-      // 4. Create preview image (full frame with photo)
+      // 4. Create preview image
       const previewCanvas = document.createElement("canvas");
       const previewCtx = previewCanvas.getContext("2d");
       
-      // Set preview to same size as window for display
       previewCanvas.width = Math.round(windowPx.w);
       previewCanvas.height = Math.round(windowPx.h);
       
-      // Draw the photo area from the export
       const windowLeft = frame.cx - frame.w/2 + windowPx.x;
       const windowTop = frame.cy - frame.h/2 + windowPx.y;
       
@@ -401,7 +630,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
   function retake() {
     setCapturedPhotoUrl("");
     setExportUrl("");
-    setShowFrame(false); // Hide frame when retaking
+    setShowFrame(false);
   }
 
   // DOM percentages for positioning
@@ -427,6 +656,27 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
   return (
     <div className={`w-full ${className}`}>
+      {/* Device orientation warning */}
+      {!deviceOrientation.permissionGranted && deviceOrientation.hasDeviceOrientation && (
+        <div className="mb-4 mx-auto max-w-[520px] p-3 bg-yellow-900/50 border border-yellow-700 rounded-lg text-yellow-200 text-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <strong>Device Orientation Permission Required</strong>
+              <p className="mt-1 text-yellow-300">
+                For proper photo rotation, please grant device orientation permission.
+              </p>
+            </div>
+            <button
+              onClick={requestOrientationPermission}
+              disabled={busy}
+              className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-md disabled:opacity-50"
+            >
+              {busy ? "Requesting..." : "Grant Permission"}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="relative mx-auto w-full max-w-[420px] sm:max-w-[520px] overflow-hidden rounded-2xl bg-white shadow-2xl aspect-[9/16]">
         {/* BG - Only show after capture */}
         {showFrame && bgImg ? (
@@ -520,19 +770,23 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
         {/* Debug info */}
         {debug && (
-          <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs z-40">
+          <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs z-40 space-y-1 max-w-[200px]">
             <div>Camera: {cameraResolution.width}x{cameraResolution.height}</div>
-            <div>Preview: {Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
-            <div>Orientation: {getScreenOrientation()}°</div>
+            <div>Screen Orientation: {screenOrientation}°</div>
             <div>Facing: {facing}</div>
-            <div>Aspect Ratio: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
-            <div>Window Size: {Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
+            <div>Device Tilt (β): {deviceOrientation.beta?.toFixed(1)}°</div>
+            <div>Device Tilt (γ): {deviceOrientation.gamma?.toFixed(1)}°</div>
+            <div>Device Compass (α): {deviceOrientation.alpha?.toFixed(1)}°</div>
+            <div>Permission: {deviceOrientation.permissionGranted ? "Granted" : "Denied"}</div>
+            <div>Supported: {deviceOrientation.hasDeviceOrientation ? "Yes" : "No"}</div>
+            <div>Aspect: {(cameraResolution.width / cameraResolution.height).toFixed(2)}</div>
+            <div>Window: {Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
           </div>
         )}
 
         {/* Controls */}
         <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3 z-30">          
-          {/* Flip/Rotate Camera Button - Circle icon */}
+          {/* Flip Camera Button */}
           <button
             type="button"
             onClick={() => setFacing((v) => (v === "user" ? "environment" : "user"))}
@@ -553,7 +807,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
             title="Capture"
           />
           
-          {/* Retake Button - Only show after capture */}
+          {/* Retake Button */}
           {capturedPhotoUrl && (
             <button
               type="button"
@@ -568,7 +822,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
             </button>
           )}
           
-          {/* Download Button - Only show after capture */}
+          {/* Download Button */}
           {capturedPhotoUrl && (
             <button
               type="button"
@@ -579,6 +833,21 @@ export default function InstaFrameCameraImage({ className = "" }) {
             >
               <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+              </svg>
+            </button>
+          )}
+          
+          {/* Device Orientation Permission Button */}
+          {!deviceOrientation.permissionGranted && deviceOrientation.hasDeviceOrientation && (
+            <button
+              type="button"
+              onClick={requestOrientationPermission}
+              disabled={busy}
+              className="h-12 w-12 rounded-full bg-purple-600 flex items-center justify-center shadow-lg hover:bg-purple-700 transition-colors disabled:opacity-60"
+              title="Grant device orientation permission"
+            >
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
               </svg>
             </button>
           )}
@@ -604,11 +873,23 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Camera Resolution:</div>
             <div>{cameraResolution.width}x{cameraResolution.height}</div>
             
-            <div>Preview Resolution:</div>
-            <div>{Math.round(windowPx.w)}x{Math.round(windowPx.h)}</div>
-            
             <div>Screen Orientation:</div>
-            <div>{getScreenOrientation()}°</div>
+            <div>{screenOrientation}°</div>
+            
+            <div>Device Beta (Tilt):</div>
+            <div>{deviceOrientation.beta?.toFixed(1)}°</div>
+            
+            <div>Device Gamma (Tilt):</div>
+            <div>{deviceOrientation.gamma?.toFixed(1)}°</div>
+            
+            <div>Device Alpha (Compass):</div>
+            <div>{deviceOrientation.alpha?.toFixed(1)}°</div>
+            
+            <div>Device Orientation Permission:</div>
+            <div>{deviceOrientation.permissionGranted ? "Granted" : "Denied"}</div>
+            
+            <div>Device Orientation Supported:</div>
+            <div>{deviceOrientation.hasDeviceOrientation ? "Yes" : "No"}</div>
             
             <div>Current Facing:</div>
             <div>{facing}</div>
