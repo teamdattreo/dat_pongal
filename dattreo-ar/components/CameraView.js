@@ -172,6 +172,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
   const [deviceOrientation, setDeviceOrientation] = useState(0);
   const [permissionGranted, setPermissionGranted] = useState(false);
   const [accelData, setAccelData] = useState({ beta: 0, gamma: 0 });
+  const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
 
   // Request device orientation permission (iOS 13+)
   const requestOrientationPermission = async () => {
@@ -182,6 +183,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
       try {
         const permission = await DeviceOrientationEvent.requestPermission();
         setPermissionGranted(permission === "granted");
+        setShowPermissionPrompt(false);
         return permission === "granted";
       } catch (e) {
         console.error("Permission request failed:", e);
@@ -189,10 +191,39 @@ export default function InstaFrameCameraImage({ className = "" }) {
         return false;
       }
     } else {
+      // Not iOS 13+ or permission not needed
       setPermissionGranted(true);
+      setShowPermissionPrompt(false);
       return true;
     }
   };
+
+  // Auto-request permission on mount
+  useEffect(() => {
+    let mounted = true;
+    
+    async function autoRequestPermission() {
+      // Check if we need to request permission
+      if (
+        typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function"
+      ) {
+        // iOS 13+ - show prompt button
+        setShowPermissionPrompt(true);
+      } else {
+        // Android or older iOS - auto-grant
+        if (mounted) {
+          setPermissionGranted(true);
+        }
+      }
+    }
+    
+    autoRequestPermission();
+    
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Load background
   useEffect(() => {
@@ -375,13 +406,13 @@ export default function InstaFrameCameraImage({ className = "" }) {
         break;
         
       case 90:
-        // Landscape right - rotate -90° to make portrait
-        rotationNeeded = -90;
+        // Landscape left - rotate 90° to make portrait
+        rotationNeeded = 90;
         break;
         
       case -90:
-        // Landscape left - rotate 90° to make portrait
-        rotationNeeded = 90;
+        // Landscape right - rotate -90° to make portrait
+        rotationNeeded = -90;
         break;
     }
     
@@ -398,12 +429,12 @@ export default function InstaFrameCameraImage({ className = "" }) {
   async function capture() {
     if (!videoRef.current || busy) return;
     
-    // Request permission if not granted (for iOS)
-    if (!permissionGranted) {
+    // Request permission if not granted and needed (for iOS)
+    if (showPermissionPrompt && !permissionGranted) {
       const granted = await requestOrientationPermission();
       if (!granted) {
-        setError("Device orientation permission required for proper photo rotation");
-        return;
+        // Continue anyway with fallback orientation detection
+        console.log("Motion permission denied, using fallback orientation detection");
       }
     }
     
@@ -592,6 +623,40 @@ export default function InstaFrameCameraImage({ className = "" }) {
           </div>
         )}
 
+        {/* Motion Permission Prompt - Centered overlay */}
+        {showPermissionPrompt && !permissionGranted && !showFrame && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-50">
+            <div className="bg-white rounded-2xl p-6 max-w-sm mx-4 shadow-2xl">
+              <div className="text-center">
+                <div className="text-4xl mb-3">📱</div>
+                <h3 className="text-lg font-bold text-gray-900 mb-2">
+                  Enable Motion Detection
+                </h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Allow motion sensors to automatically rotate your photos correctly when taking pictures in different orientations.
+                </p>
+                <button
+                  type="button"
+                  onClick={requestOrientationPermission}
+                  className="w-full rounded-xl bg-blue-600 px-6 py-3 text-base font-semibold text-white shadow-lg hover:bg-blue-700 transition-colors"
+                >
+                  Enable Motion
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPermissionPrompt(false);
+                    // Use fallback orientation detection
+                  }}
+                  className="w-full mt-2 rounded-xl bg-gray-200 px-6 py-2 text-sm font-medium text-gray-700 hover:bg-gray-300 transition-colors"
+                >
+                  Skip (use basic detection)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error */}
         {error ? (
           <div className="absolute inset-0 grid place-items-center bg-black/70 p-6 text-center z-50">
@@ -615,16 +680,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
 
         {/* Controls */}
         <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3 z-30">
-          {!permissionGranted && !showFrame && (
-            <button
-              type="button"
-              onClick={requestOrientationPermission}
-              className="rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-lg hover:bg-blue-700 transition-colors"
-            >
-              Enable Motion
-            </button>
-          )}
-          
           {/* Flip Camera Button */}
           <button
             type="button"
