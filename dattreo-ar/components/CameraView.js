@@ -186,7 +186,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
         setShowPermissionPrompt(false);
         return permission === "granted";
       } catch (e) {
-        console.error("Permission request failed:", e);
         setPermissionGranted(false);
         return false;
       }
@@ -334,14 +333,12 @@ export default function InstaFrameCameraImage({ className = "" }) {
             if (videoRef.current) {
               const { videoWidth, videoHeight } = videoRef.current;
               setCameraResolution({ width: videoWidth, height: videoHeight });
-              console.log(`Camera resolution: ${videoWidth}x${videoHeight}`);
             }
           };
           
           await videoRef.current.play();
         }
       } catch (e) {
-        console.error("Camera error:", e);
         try {
           const fallbackConstraints = {
             video: { facingMode: facing },
@@ -385,9 +382,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
   function autoRotateForPortrait(capturedCanvas, currentOrientation) {
     const { width, height } = capturedCanvas;
     
-    console.log(`Device orientation at capture: ${currentOrientation}°`);
-    console.log(`Image dimensions: ${width}x${height}`);
-    
     let rotationNeeded = 0;
     
     // Determine rotation based on device orientation
@@ -416,8 +410,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
         break;
     }
     
-    console.log(`Rotation needed: ${rotationNeeded}°`);
-    
     if (rotationNeeded === 0) {
       return capturedCanvas;
     }
@@ -434,7 +426,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
       const granted = await requestOrientationPermission();
       if (!granted) {
         // Continue anyway with fallback orientation detection
-        console.log("Motion permission denied, using fallback orientation detection");
       }
     }
     
@@ -446,8 +437,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
       if (!video.videoWidth || !video.videoHeight) {
         throw new Error("Video not ready yet.");
       }
-
-      console.log(`Capturing at: ${video.videoWidth}x${video.videoHeight}`);
 
       // 1. Capture the raw video frame (mirrored for front camera only)
       const rawSnapshot = snapshotMirroredVideo(video, facing === "user");
@@ -528,7 +517,6 @@ export default function InstaFrameCameraImage({ className = "" }) {
       
     } catch (e) {
       setError(e?.message || String(e));
-      console.error("Capture error:", e);
     } finally {
       setBusy(false);
     }
@@ -667,7 +655,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
         ) : null}
 
         {/* Debug info */}
-        {debug && (
+        {/* {debug && (
           <div className="absolute top-4 left-4 bg-black/70 text-white p-2 rounded text-xs z-40 space-y-1">
             <div>Camera: {cameraResolution.width}x{cameraResolution.height}</div>
             <div>Orientation: {deviceOrientation}°</div>
@@ -676,21 +664,24 @@ export default function InstaFrameCameraImage({ className = "" }) {
             <div>Facing: {facing}</div>
             <div>Permission: {permissionGranted ? "✓" : "✗"}</div>
           </div>
-        )}
+        )} */}
 
-        {/* Controls */}
+        {/* Controls - Updated buttons with better icons */}
         <div className="absolute bottom-3 left-0 right-0 flex flex-wrap sm:flex-nowrap items-center justify-center gap-2 sm:gap-3 px-3 z-30">
-          {/* Flip Camera Button */}
+          {/* Camera Facing Switch Button - Updated */}
           <button
             type="button"
             onClick={() => setFacing((v) => (v === "user" ? "environment" : "user"))}
             className="h-12 w-12 rounded-full bg-white/90 flex items-center justify-center shadow-lg hover:bg-white transition-colors"
             title="Flip camera"
           >
-            🔄
+            <svg className="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
           </button>
 
-          {/* Capture Button */}
+          {/* Capture Button - Kept same */}
           <button
             type="button"
             onClick={capture}
@@ -699,19 +690,21 @@ export default function InstaFrameCameraImage({ className = "" }) {
             title="Capture"
           />
 
-          {/* Retake Button */}
+          {/* Retake Button - Updated */}
           {capturedPhotoUrl && (
             <button
               type="button"
               onClick={retake}
-              className="h-12 w-12 rounded-full bg-rose-600 flex items-center justify-center shadow-lg hover:bg-rose-700 transition-colors"
+              className="h-12 w-12 rounded-full bg-blue-600 flex items-center justify-center shadow-lg hover:bg-blue-700 transition-colors"
               title="Retake"
             >
-              ↺
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
             </button>
           )}
 
-          {/* Download Button */}
+          {/* Download Button - Updated */}
           {capturedPhotoUrl && (
             <button
               type="button"
@@ -720,23 +713,25 @@ export default function InstaFrameCameraImage({ className = "" }) {
               className="h-12 w-12 rounded-full bg-green-600 flex items-center justify-center shadow-lg hover:bg-green-700 transition-colors disabled:opacity-60"
               title="Download again"
             >
-              💾
+              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
             </button>
           )}
 
-          {/* Debug Toggle */}
-          <button
+          {/* Debug Toggle - Kept same */}
+          {/* <button
             type="button"
             onClick={() => setDebug(v => !v)}
             className="h-12 w-12 rounded-full bg-gray-700 flex items-center justify-center shadow-lg hover:bg-gray-800 transition-colors text-white text-xs"
           >
             {debug ? "D" : "D"}
-          </button>
+          </button> */}
         </div>
       </div>
 
       {/* Debug panel */}
-      {debug && (
+      {/* {debug && (
         <div className="mx-auto mt-3 max-w-[520px] rounded-xl border border-white/10 bg-neutral-950/60 p-3 text-xs text-white">
           <div className="mb-2 font-semibold">Debug Information</div>
           <div className="grid grid-cols-2 gap-3">
@@ -783,7 +778,7 @@ export default function InstaFrameCameraImage({ className = "" }) {
             </label>
           </div>
         </div>
-      )}
+      )} */}
     </div>
   );
 }
